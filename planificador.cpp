@@ -170,83 +170,40 @@ static void parsear_dependencias(string campo, Actividad &act){
     }
 }
 
-//Lee el archivo linea por linea y llena el arreglo de actividades
-static int parsear_plan(const char *ruta_archivo, Actividad actividades[], int *out_n){
-    //Abre el archivo en modo lectura
-    ifstream archivo(ruta_archivo);
-    if(!archivo.is_open()){
-        cerr << "Error: No se pudo abrir el archivo " << ruta_archivo << endl;
-        return -1;
+//Modelado del DAG de dependencias
+
+//Busca una actividad por su ID y devuelve su posición en el arreglo
+static int buscar_indice_por_id(Actividad actividades[], int n, const char *id){
+    //Recorre todas las actividades del arreglo
+    for(int i = 0; i < n; i++){    
+        //Compara si el ID coincide y retorna el indice
+        if(son_iguales(actividades[i].id, id)) 
+        return i;  
     }
-    string linea_std;
-    //Contador de actividades leidas
-    int n = 0;
-    //Lee el archivo linea por linea hasta el final
-    while(getline(archivo, linea_std)){
-        string linea = trim(linea_std);
-        //Salta las lineas vacias
-        if(linea.empty())
-          continue;
-        //Evita pasar el tamaño maximo del arreglo
-        if(n >= max_actividades)
-          break;
-        //Arreglo para guardar los 4 campos separados por ":"
-        string campos[4] = {"", "", "", ""};
-        int num_campos = 0;
-        //Se separa por ":"
-        for(char c : linea){
-            if(c == ':'){
-                //Al encontrar un ":", avanza al siguiente campo (hasta un maximo de 4 campos)
-                if(num_campos < 3){
-                    num_campos++;
-                }
+    return -1;                                             
+}
+
+//Conecta las actividades entre si (construye las aristas del grafo DAG)
+static int construir_dag(Actividad actividades[], int n){
+    //Recorre cada actividad del plan
+    for(int i = 0; i < n; i++){    
+        //Recorre las dependencias que declara la actividad 'i'
+        for(int k = 0; k < actividades[i].num_deps; k++){   
+            int idx = buscar_indice_por_id(actividades, n, actividades[i].dep_ids[k]); 
+            //Guarda en 'i' la posición del padre que debe esperar
+            actividades[i].dep_idx[k] = idx;                                   
+            //Obtiene una referencia directa a la actividad padre
+            Actividad &padre = actividades[idx];                               
+            //Valida no sobrepasar el limite de dependientes
+            if(padre.num_dependientes >= max_dependientes){                  
+                cout << "Error: '" << padre.id
+                     << "' supero el maximo de dependientes" << endl;          
+            return -1;                                                     
             }
-            else{
-                //Va acumulando los caracteres en el campo correspondiente
-                campos[num_campos] += c;
-            }
+            //Registra a 'i' como dependiente del padre e incrementa su contador
+            padre.dependientes_idx[padre.num_dependientes++] = i;             
         }
-        //Referencia a la actividad actual dentro del arreglo
-        Actividad &act = actividades[n];
-        //Campo 1: copia del ID
-        string id_str = trim(campos[0]);
-        size_t i = 0;
-        while(i < id_str.length() && i < max_id_len - 1){
-            act.id[i] = id_str[i];
-            i++;
-        }
-        //Cierra la cadena con caracter nulo
-        act.id[i] = '\0'; 
-        //Campo 2: copia  del nombre
-        string nom_str = trim(campos[1]);
-        i = 0;
-        while(i < nom_str.length() && i < max_nombre_len - 1){
-            act.nombre[i] = nom_str[i];
-            i++;
-        }
-        act.nombre[i] = '\0';
-        //Campo 3: tiempo de ejecucion en milisegundos
-        string tiempo_txt = trim(campos[2]);
-        if(tiempo_txt.empty()){
-            //Si no tiene tiempo, le da un valor aleatorio dentro del rango
-            act.tiempo_ms = tiempo_min_ms + rand() % (tiempo_max_ms - tiempo_min_ms + 1);
-        }
-        else{
-            //Convierte la cadena numerica a entero
-            act.tiempo_ms = atoi(tiempo_txt.c_str());
-        }
-        //Campo 4: extrae las dependencias asociadas
-        parsear_dependencias(campos[3], act);
-        //Inicializacion de variables de control del proceso
-        act.estado = Pendiente;
-        act.pid = -1;
-        act.num_dependientes = 0;
-        //Incrementa el conteo de actividades cargadas
-        n++; 
     }
-    archivo.close(); 
-    //Guarda la cantidad total de actividades leidas a traves del puntero
-    *out_n = n;
-    return 0;
+    return 0;                                                                 
 }
 
