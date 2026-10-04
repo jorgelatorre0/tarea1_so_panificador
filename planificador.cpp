@@ -401,8 +401,113 @@ static int buscar_por_pid(Actividad actividades[], int n, pid_t pid){
     for(int i = 0; i < n; i++){
         //Verifica que la actividad este en ejecución y que el pid coincida con el retornado por waitpid
         if(actividades[i].estado == Ejecutando && actividades[i].pid == pid)
-          //Retorna el indice de la actividad encontrada en el arreglo
+          //Retorna el índice de la actividad encontrada en el arreglo
           return i;
     }
     return -1;
 }
+
+//Scheduler
+
+//Cuando una actividad termina bien, revisa si sus dependientes ya pueden ejecutarse
+static void revisar_dependientes(Actividad actividades[], int idx_terminada, int cola[], int &cola_cola){
+    Actividad &terminada = actividades[idx_terminada];
+    //Recorre las actividades que dependen de la que acaba de terminar
+    for(int k = 0; k < terminada.num_dependientes; k++){
+        Actividad &dep = actividades[terminada.dependientes_idx[k]];
+        //Solo importan las que siguen esperando
+        if(dep.estado != Pendiente)
+          continue;
+        //Revisa si todas sus dependencias están en Ok
+        bool todas_ok = true;
+        for(int j = 0; j < dep.num_deps; j++){
+            if(actividades[dep.dep_idx[j]].estado != Ok){
+                todas_ok = false;
+                break;
+            }
+        }
+        //Si todas están Ok, pasa a Lista y entra al final de la cola
+        if(todas_ok){
+            dep.estado = Lista;
+            cola[cola_cola] = terminada.dependientes_idx[k];
+            cola_cola++;
+        }
+    }
+}
+
+//Ejecuta todo el plan, con a lo mas K procesos corriendo al mismo tiempo
+static void ejecutar_plan(Actividad actividades[], int n, int k){
+    //Cola de actividades listas para lanzar
+    int cola[max_actividades];
+    //Posición de la próxima actividad a sacar de la cola
+    int cola_cabeza = 0;
+    //Posición donde se agrega la próxima actividad a la cola
+    int cola_cola = 0;
+    //Las actividades sin dependencias están listas desde el inicio
+    for(int i = 0; i < n; i++){
+        if(actividades[i].num_deps == 0){
+            actividades[i].estado = Lista;
+            cola[cola_cola] = i;
+            cola_cola++;
+        }
+    }
+    //Procesos hijo corriendo en este momento
+    int ejecutando = 0;
+    //Actividades que ya terminaron
+    int terminadas = 0;
+    while(terminadas < n){
+        //Lanza actividades de la cola mientras haya y no se supere el limite K
+        while(cola_cabeza < cola_cola && ejecutando < k){
+            int idx = cola[cola_cabeza];
+            cola_cabeza++;
+            //Ignora las que fueron abortadas mientras esperaban en la cola
+            if(actividades[idx].estado != Lista)
+              continue;
+            if(lanzar_actividad(actividades, idx) == 0){
+                ejecutando++;
+            }
+            else{
+                //Si no se pudo lanzar, se trata como una actividad fallida
+                actividades[idx].estado = Fallida;
+                terminadas++;
+                cout << "Actividad '" << actividades[idx].id << "' fallo al lanzarse" << endl;
+                for(int d = 0; d < actividades[idx].num_dependientes; d++){
+                    abortar_rama_recursiva(actividades, actividades[idx].dependientes_idx[d], terminadas);
+                }
+            }
+        }
+        //Si no hay nada corriendo ni nada por lanzar, termina
+        if(ejecutando == 0)
+          break;
+        //Espera a que termine cualquier hijo
+        int status;
+        pid_t pid = waitpid(-1, &status, 0);
+        if(pid < 0)
+          break;
+        //Un proceso menos corriendo
+        ejecutando--;
+        //Busca a que actividad corresponde ese pid
+        int idx = buscar_por_pid(actividades, n, pid);
+        if(idx < 0)
+          continue;
+        //Si el hijo termino normalmente con código de éxito, la actividad salió bien
+        if(WIFEXITED(status) && WEXITSTATUS(status) == EXIT_SUCCESS){
+            actividades[idx].estado = Ok;
+            terminadas++;
+            cout << "Actividad '" << actividades[idx].id << "' (" << actividades[idx].nombre << ") termino OK" << endl;
+            //Revisa si esta actividad libero a alguna otra
+            revisar_dependientes(actividades, idx, cola, cola_cola);
+        }
+        else{
+            //Si no, falló (como EXIT_FAILURE o kill -9)
+            actividades[idx].estado = Fallida;
+            terminadas++;
+            cout << "Actividad '" << actividades[idx].id << "' falló" << endl;
+            //Aborta solo la rama que dependia de la actividad fallida
+            for(int d = 0; d < actividades[idx].num_dependientes; d++){
+                abortar_rama_recursiva(actividades, actividades[idx].dependientes_idx[d], terminadas);
+            }
+        }
+    }
+}
+
