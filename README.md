@@ -64,4 +64,28 @@ Para probar la Seremi se debe presionar Ctrl+C durante la ejecución.
 
 Cada actividad tiene un estado (Pendiente, Lista, Ejecutando, Ok, Fallida, Abortada) que el scheduler va actualizando.
 
+4.- Decisiones de Diseño
+Control de concurrencia (K), sin busy-waiting ni race conditions:
+El scheduler cuenta cuantos procesos están corriendo y solo lanza otro mientras ese numero sea menor que K. Las demás actividades esperan en una cola. Para esperar usa waitpid bloqueador, así el padre queda dormido sin gastar CPU mientras no termine ningún hijo. No hay race conditions porque solo el proceso padre decide que se lanza y modifica los estados; los hijos tienen su propia copia de la memoria y solo se comunican por pipes, por lo que no hay datos compartidos.
+ 
+Un pipe por cada arista del DAG:
+Cada dependiente recibe su propio pipe, así cada actividad lee exactamente un mensaje por dependencia. El mensaje es un texto corto y acotado (máximo 128 bytes). Como una actividad solo se lanza cuando todas sus dependencias terminaron bien, los mensajes ya fueron escritos y read no se queda bloqueado.
+ 
+Pipes creados justo antes de cada fork:
+Crear todos los pipes al inicio agotaría el limite de descriptores del sistema (1024) mucho antes de llegar a 10000 actividades. Por eso se crean en lanzar_actividad, y el padre cierra sus copias apenas lanza al hijo. Si un dependiente ya fue abortado, no se crea el pipe hacia el.
+ 
+Carga de estrés (hasta 10000 actividades):
+Los arreglos son estáticos con capacidad para 10001 actividades. subir_limite_fds sube el limite de archivos abiertos hasta 20000 (o hasta el máximo que permita el sistema), porque cada pipe usa 2 descriptores.
+ 
+Aislamiento de errores:
+Cada actividad es un proceso distinto, así que si una falla el planificador sigue corriendo. Con waitpid el padre considera que una actividad salio bien solo si el proceso termino normalmente con EXIT_SUCCESS. En cualquier otro caso (código de error o muerte por señal) la actividad pasa a fallida y abortar_rama_recursiva aborta unicamente a las actividades que dependen de ella. Si no se puede crear un pipe o un proceso, se trata igual que una falla.
+ 
+Inspección de la Seremi (Ctrl+C):
+Se registra un piloto para SIGINT que avisa, envía SIGTERM a los hijos que siguen en ejecución y termina. Como los hijos heredan el piloto con fork, cada hijo lo restablece al comportamiento por defecto, si no, Ctrl+C haría que todos los hijos imprimieran el mensaje de la Seremi.
+  
+5.- Limitaciones
+- Máximo 20 dependencias por actividad, 1000 dependientes por actividad y 10001 actividades por plan.
+- Se asume que plan.txt tiene el formato correcto.
+- Las actividades no fallan por si solas, si falla se provoca desde afuera o por errores del sistema al crear pipes o procesos.
+
 
