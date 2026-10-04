@@ -510,4 +510,52 @@ static void ejecutar_plan(Actividad actividades[], int n, int k){
         }
     }
 }
+//Inspeccion de la Seremi (Ctrl+C)
 
+//Se ejecuta automaticamente cuando el usuario presiona Ctrl+C (SIGINT)
+static void manejador_seremi(int sig){
+    //El parametro no se usa, esto evita el warning del compilador
+    (void)sig;
+    //Mensaje de la Seremi (write es seguro de usar dentro de un manejador de señales)
+    const char msg[] = "\n[SEREMI] Inspeccion sorpresa! Abortando todas las actividades...\n";
+    ssize_t r = write(STDOUT_FILENO, msg, sizeof(msg) - 1);
+    (void)r;
+    //Envia SIGTERM a todos los hijos que siguen corriendo
+    for(int i = 0; i < g_num_actividades; i++){
+        if(g_actividades[i].estado == Ejecutando && g_actividades[i].pid > 0){
+            kill(g_actividades[i].pid, SIGTERM);
+        }
+    }
+    //Termina el planificador
+    _exit(1);
+}
+
+//Programa principal
+
+int main(int argc, char *argv[]){
+    //Debe recibir exactamente 2 argumentos: el archivo del plan y K
+    if(argc != 3){
+        cout << "Uso: " << argv[0] << " plan.txt K" << endl;
+        return 1;
+    }
+    //Convierte K de texto a numero
+    int k = atoi(argv[2]);
+    if(k <= 0){
+        cout << "Error: K debe ser un entero positivo" << endl;
+        return 1;
+    }
+    //Registra la señal SIGINT: al presionar Ctrl+C se llama a manejador_seremi
+    signal(SIGINT, manejador_seremi);
+    //Aumenta el limite de descriptores para soportar planes grandes
+    subir_limite_fds();
+    //1. Lee el archivo del plan
+    if(parsear_plan(argv[1], g_actividades, &g_num_actividades) != 0)
+      return 1;
+    //2. Arma el grafo de dependencias
+    if(construir_dag(g_actividades, g_num_actividades) != 0)
+      return 1;
+    cout << "Plan cargado: " << g_num_actividades << " actividades (K=" << k << ")" << endl << endl;
+    //3. Ejecuta el plan con concurrencia K
+    ejecutar_plan(g_actividades, g_num_actividades, k);
+    return 0;
+}
