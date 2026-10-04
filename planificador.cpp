@@ -15,25 +15,25 @@ using namespace std;
 
 //Constantes y estructura de datos
 
-//Largo maximo del ID de una actividad
+//Largo máximo del ID de una actividad
 #define max_id_len 64
-//Largo maximo del nombre de una actividad
+//Largo máximo del nombre de una actividad
 #define max_nombre_len 128
-//Maximo de dependencias que puede tener una actividad
+//Máximo de dependencias que puede tener una actividad
 #define max_deps 20
-// Mximo de actividades que pueden depender de una sola
+// Máximo de actividades que pueden depender de una sola
 #define max_dependientes 1000
-//Maximo de actividades del plan (10000+1 de margen)
+//Máximo de actividades del plan (10000+1 de margen)
 #define max_actividades 10001
-//Tiempo minimo al asignar duracion aleatoria
+//Tiempo mínimo al asignar duración aleatoria
 #define tiempo_min_ms 100
-//Tiempo maximo al asignar duracion aleatoria
+//Tiempo máximo al asignar duración aleatoria
 #define tiempo_max_ms 5000
 
 //Estados por lo que pasa una actividad
 enum EstadoActividad {Pendiente, Lista, Ejecutando, Ok, Fallida, Abortada};
 
-//Informacion de una actividad del plan
+//Información de una actividad del plan
 struct Actividad {
     char id[max_id_len];
     char nombre[max_nombre_len];
@@ -92,7 +92,7 @@ static string trim(string s){
     return resultado;
 }
 
-//Arma el mensaje "Insumo de <id> listo" que se envia por los pipes
+//Arma el mensaje "Insumo de <id> listo" que se envía por los pipes
 static int construir_mensaje_insumo(char *buffer, const char *id, int limite_max){
     //Se arma el texto
     string msg = "Insumo de " + string(id) + " listo";
@@ -125,20 +125,22 @@ static void subir_limite_fds(){
     setrlimit(RLIMIT_NOFILE, &limite);
 }
 
-
-//Lectura y construccion del plan
+//Lectura y construcción del plan
 
 //Procesa el texto del cuarto campo y guarda los IDs de las dependencias
 static void parsear_dependencias(string campo, Actividad &act){
     //Limpia los espacios al inicio y al final de la cadena recibida
     string s = trim(campo);
-    //Si el texto queda vacio, la actividad no tiene dependencias
-    if(s.empty()){
-        act.num_deps = 0;
-        return;
+    //Si el texto viene entre corchetes, como en "[1, 2]", los quita
+    if(s.length() >= 2 && s[0] == '[' && s[s.length() - 1] == ']'){
+        s = trim(s.substr(1, s.length() - 2));
     }
     //Inicializa el contador de dependencias encontradas
     act.num_deps = 0;
+    //Si el texto queda vacío, la actividad no tiene dependencias
+    if(s.empty()){
+        return;
+    }
     //Acumulador temporal para construir el ID de cada dependencia
     string actual = "";
     //Recorre el string caracter por caracter
@@ -170,6 +172,7 @@ static void parsear_dependencias(string campo, Actividad &act){
     }
 }
 
+
 //Lee el archivo linea por linea y llena el arreglo de actividades
 static int parsear_plan(const char *ruta_archivo, Actividad actividades[], int *out_n){
     //Abre el archivo en modo lectura
@@ -178,6 +181,8 @@ static int parsear_plan(const char *ruta_archivo, Actividad actividades[], int *
         cerr << "Error: No se pudo abrir el archivo " << ruta_archivo << endl;
         return -1;
     }
+    //Semilla para los tiempos aleatorios (sin esto salen siempre iguales)
+    srand(time(NULL));
     string linea_std;
     //Contador de actividades leidas
     int n = 0;
@@ -217,7 +222,7 @@ static int parsear_plan(const char *ruta_archivo, Actividad actividades[], int *
         }
         //Cierra la cadena con caracter nulo
         act.id[i] = '\0'; 
-        //Campo 2: copia  del nombre
+        //Campo 2: copia del nombre
         string nom_str = trim(campos[1]);
         i = 0;
         while(i < nom_str.length() && i < max_nombre_len - 1){
@@ -225,27 +230,28 @@ static int parsear_plan(const char *ruta_archivo, Actividad actividades[], int *
             i++;
         }
         act.nombre[i] = '\0';
-        //Campo 3: copia del tiempo de ejecucion en milisegundos
+        //Campo 3: copia del tiempo de ejecución en milisegundos
         string tiempo_txt = trim(campos[2]);
         if(tiempo_txt.empty()){
             //Si no tiene tiempo, le da un valor aleatorio dentro del rango
             act.tiempo_ms = tiempo_min_ms + rand() % (tiempo_max_ms - tiempo_min_ms + 1);
         }
         else{
-            //Convierte la cadena numerica a entero
+            //Convierte la cadena numérica a entero
             act.tiempo_ms = atoi(tiempo_txt.c_str());
         }
         //Campo 4: extrae las dependencias asociadas
         parsear_dependencias(campos[3], act);
-        //Inicializacion de variables de control del proceso
+        //Inicialización de variables de control del proceso
         act.estado = Pendiente;
         act.pid = -1;
         act.num_dependientes = 0;
+        act.num_fd_lectura = 0;
         //Incrementa el conteo de actividades cargadas
         n++; 
     }
     archivo.close(); 
-    //Guarda la cantidad total de actividades leidas a traves del puntero
+    //Guarda la cantidad total de actividades leídas a través del puntero
     *out_n = n;
     return 0;
 }
@@ -285,100 +291,85 @@ static int construir_dag(Actividad actividades[], int n){
     }
     return 0;                                                                 
 }
-//Crea las pipes para todo el grafo
-    for (int i = 0; i < n; i++) {
-        Actividad &padre = actividades[i];
-        //Recorre la lista de hijos que depende de este padre
-        for (int d = 0; d < padre.num_dependientes; d++) {
-            int idx_hijo = padre.dependientes_idx[d];
-            Actividad &hijo = actividades[idx_hijo];
-            //(fds[0] es para lectura, fds[1] es para escritura)
-            int fds[2];
-            if (pipe(fds) < 0) {
-                perror("Error al crear pipe en el DAG");
-                return -1;
-            }
-            //Asigna la escritura al padre
-            padre.fd_escritura[d] = fds[1];
-            //Asigna la lectura al hijo
-            hijo.fd_lectura[hijo.num_fd_lectura] = fds[0];
-            hijo.num_fd_lectura++;
-        }
-    }
-    return 0;                                                      
-}
-
-//Creación de procesos y scheduler
+//Creación de procesos y paso de mensajes por pipes
 
 //Lanza el proceso hijo para ejecutar una actividad y gestionar sus mensajes
 static int lanzar_actividad(Actividad actividades[], int idx_actual){
     Actividad &act = actividades[idx_actual];
+    //Crea un pipe por cada actividad que depende de esta (se crean justo antes del fork y no todos de una vez, para no agotar los descriptores de archivo)
+    for(int d = 0; d < act.num_dependientes; d++){
+        Actividad &hijo = actividades[act.dependientes_idx[d]];
+        //Si el dependiente ya fue abortado, no hace falta crear el pipe
+        if(hijo.estado == Abortada){
+            act.fd_escritura[d] = -1;
+            continue;
+        }
+        //[0] es para lectura, [1] es para escritura
+        int fds[2];
+        if(pipe(fds) < 0){
+            perror("Error al crear pipe");
+            return -1;
+        }
+        //Esta actividad escribirá por fds[1]
+        act.fd_escritura[d] = fds[1];
+        //El dependiente leerá por fds[0]
+        hijo.fd_lectura[hijo.num_fd_lectura] = fds[0];
+        hijo.num_fd_lectura++;
+    }
     //Crea el proceso hijo
     pid_t pid = fork();
-    //Falla en la creacion del proceso
+    //Falla en la creación del proceso
     if(pid < 0){
         perror("Error al hacer fork");
         return -1;
     }
     //Hijo
     if(pid == 0){
+        //El hijo no usa el manejador de la Seremi, así Ctrl+C lo termina sin imprimir el mensaje de nuevo
+        signal(SIGINT, SIG_DFL);
         //Lee los mensajes que le enviaron sus antecesores
         for(int k = 0; k < act.num_fd_lectura; k++){
             char buffer_mensaje[128];
-            //Lee desde el pipe de entrada (fds[0])
+            //Lee desde el pipe de entrada fds[0]
             ssize_t bytes_leidos = read(act.fd_lectura[k], buffer_mensaje, sizeof(buffer_mensaje) - 1);
             if(bytes_leidos > 0){
                 //Agrega fin de cadena
                 buffer_mensaje[bytes_leidos] = '\0';
                 cout << "pid " << getpid() << " '" << act.id
-                     << "' recibio señal por pipe: " << buffer_mensaje << "" << endl;
+                     << "' recibio insumo por pipe: " << buffer_mensaje << endl;
             }
             //Cierra el pipe de lectura
             close(act.fd_lectura[k]);
-            //Marca como cerrado
-            act.fd_lectura[k] = -1; 
         }
         //Muestra mensaje de inicio y simula el tiempo de ejecucion
         cout << "pid " << getpid() << " iniciando actividad " << act.id << " (" << act.nombre << ") " << act.tiempo_ms << " ms" << endl;
-
         //Convierte milisegundos a microsegundos para usleep
         usleep(act.tiempo_ms * 1000);
-        //Evalua si la tarea falla (10% de probabilidad)
-        srand(time(NULL) + getpid());
-        bool fallo = (rand() % 100) < 10;
-        if(fallo){
-            cout << "pid " << getpid() << " " << act.id << " fallo" << endl;
-            //Si falla, cierra los pipes de salida sin escribir nada
-            for(int d = 0; d < act.num_dependientes; d++){
-                if(act.fd_escritura[d] >= 0){
-                    close(act.fd_escritura[d]);
-                    act.fd_escritura[d] = -1;
-                }
-            }
-            //Termina con error
-            exit(EXIT_FAILURE); 
-        }
-        //Si no fallo, envia el mensaje a sus actividades dependientes
+        //Envía el mensaje a sus actividades dependientes
         char mensaje[128];
         int largo = construir_mensaje_insumo(mensaje, act.id, 128);
         for(int d = 0; d < act.num_dependientes; d++){
             //Si la tarea dependiente fue abortada, ignora ese pipe
-            if (act.fd_escritura[d] < 0)
+            if(act.fd_escritura[d] < 0)
               continue;
-            //Escribe en el pipe de salida y lo cierra
-            write(act.fd_escritura[d], mensaje, largo + 1);
+            //Escribe en el pipe de salida (si falla la escritura, la actividad termina con error)
+            if(write(act.fd_escritura[d], mensaje, largo + 1) < 0)
+              exit(EXIT_FAILURE);
+            //Cierra el pipe de salida
             close(act.fd_escritura[d]);
-            act.fd_escritura[d] = -1;
         }
         //Termina exitosamente
         exit(EXIT_SUCCESS);
     }
     //Padre
-    //El padre cierra sus copias de lectura de esta tarea
+    //El padre cierra sus copias de lectura de esta tarea (las usa el hijo)
     for(int k = 0; k < act.num_fd_lectura; k++){
-        if(act.fd_lectura[k] >= 0){
-            close(act.fd_lectura[k]);
-            act.fd_lectura[k] = -1;
+        close(act.fd_lectura[k]);
+    }
+    //El padre cierra sus copias de escritura (las usa el hijo)
+    for(int d = 0; d < act.num_dependientes; d++){
+        if(act.fd_escritura[d] >= 0){
+            close(act.fd_escritura[d]);
         }
     }
     //Guarda el id del hijo y cambia su estado
@@ -387,31 +378,3 @@ static int lanzar_actividad(Actividad actividades[], int idx_actual){
     return 0;
 }
 
-//Abortar ramas para aislamiento de errores
-static void abortar_rama_recursiva(Actividad actividades[], int idx, int &terminadas){
-    //Obtiene referencia a la actividad actual en el arreglo con su índice
-    Actividad &act = actividades[idx];
-    //Si la tarea ya fue abortada o falló, no la procesa de nuevo
-    if (act.estado == Abortada || act.estado == Fallida)
-      return;
-    //Cambia el estado porque su antecedente falló
-    act.estado = Abortada;
-    terminadas++;
-    //Muestra la cancelación
-    cout << "Actividad '" << act.id << "' abortada por falla en su rama dependiente" << endl;
-    //Recorre las tareas hijas que dependían de esta actividad y las aborta
-    for(int i = 0; i < act.num_dependientes; i++){
-        abortar_rama_recursiva(actividades, act.dependientes_idx[i], terminadas);
-    }
-}
-
-//Busca la actividad asociada a un pid que esta corriendo
-static int buscar_por_pid(Actividad actividades[], int n, pid_t pid){
-    for(int i = 0; i < n; i++){
-    //Verifica que la actividad esté en ejecución y que el pid coincida con el retornado por el waitpid
-        if (actividades[i].estado == Ejecutando && actividades[i].pid == pid)
-        //Retorna el índice de la actividad encontrada en el arreglo
-          return i;
-    }
-    return -1;
-}
