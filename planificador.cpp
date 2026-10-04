@@ -378,3 +378,31 @@ static int lanzar_actividad(Actividad actividades[], int idx_actual){
     return 0;
 }
 
+//Abortar ramas para aislamiento de errores
+static void abortar_rama_recursiva(Actividad actividades[], int idx, int &terminadas){
+    //Obtiene referencia a la actividad actual en el arreglo con su indice
+    Actividad &act = actividades[idx];
+    //Si la tarea ya fue abortada o fallo, no la procesa de nuevo
+    if(act.estado == Abortada || act.estado == Fallida)
+      return;
+    //Cambia el estado porque su antecedente fallo
+    act.estado = Abortada;
+    terminadas++;
+    //Muestra la cancelación
+    cout << "Actividad '" << act.id << "' abortada por falla en su rama dependiente" << endl;
+    //Recorre las tareas hijas que dependían de esta actividad y las aborta
+    for(int i = 0; i < act.num_dependientes; i++){
+        abortar_rama_recursiva(actividades, act.dependientes_idx[i], terminadas);
+    }
+}
+
+//Busca la actividad asociada a un pid que esta corriendo
+static int buscar_por_pid(Actividad actividades[], int n, pid_t pid){
+    for(int i = 0; i < n; i++){
+        //Verifica que la actividad este en ejecución y que el pid coincida con el retornado por waitpid
+        if(actividades[i].estado == Ejecutando && actividades[i].pid == pid)
+          //Retorna el indice de la actividad encontrada en el arreglo
+          return i;
+    }
+    return -1;
+}
